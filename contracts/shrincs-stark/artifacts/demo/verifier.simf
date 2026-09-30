@@ -1,0 +1,1173 @@
+simc "0.8.0";
+fn sha256(input: u256) -> u256 {
+    let ctx: Ctx8 = jet::sha_256_ctx_8_init();
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_32(ctx, input);
+    jet::sha_256_ctx_8_finalize(ctx)
+}
+fn sha256_32(input: u32) -> u256 {
+    let ctx: Ctx8 = jet::sha_256_ctx_8_init();
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, input);
+    jet::sha_256_ctx_8_finalize(ctx)
+}
+fn sha256_pair(left: u256, right: u256) -> u256 {
+    let ctx: Ctx8 = jet::sha_256_ctx_8_init();
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_32(ctx, left);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_32(ctx, right);
+    jet::sha_256_ctx_8_finalize(ctx)
+}
+fn test_sha256() {
+    let input: u256 = 0x0000000000000000000000000000000000000000000000000000000000000000;
+    let result: u256 = sha256(input);
+    assert!(jet::eq_256(result, 0x66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925));
+}
+fn test_sha256_32() {
+    let input: u32 = 2915689030;
+    let result: u256 = sha256_32(input);
+    assert!(jet::eq_256(result, 64711419806867828842001989061968035503454892533703351743109315571114974747662));
+}
+type ChannelState = u256;
+fn channel_mix_32(state: ChannelState, input: u32) -> ChannelState {
+    let ctx: Ctx8 = jet::sha_256_ctx_8_init();
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_32(ctx, state);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, input);
+    jet::sha_256_ctx_8_finalize(ctx)
+}
+fn channel_mix_256(state: ChannelState, input: u256) -> ChannelState {
+    let ctx: Ctx8 = jet::sha_256_ctx_8_init();
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_32(ctx, state);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_32(ctx, input);
+    jet::sha_256_ctx_8_finalize(ctx)
+}
+fn channel_mix(state: ChannelState) -> ChannelState {
+    sha256(state)
+}
+fn split_256(value: u256) -> (u32, u32, u32, u32, u32, u32, u32, u32) {
+    let (abcd, efgh): (u128, u128) = <u256>::into(value);
+    let (ab, cd): (u64, u64) = <u128>::into(abcd);
+    let (ef, gh): (u64, u64) = <u128>::into(efgh);
+    let (a, b): (u32, u32) = <u64>::into(ab);
+    let (c, d): (u32, u32) = <u64>::into(cd);
+    let (e, f): (u32, u32) = <u64>::into(ef);
+    let (g, h): (u32, u32) = <u64>::into(gh);
+    (a, b, c, d, e, f, g, h)
+}
+fn reduce_limb_32_mod_32(limb: u32, r: u32, modulo: u32) -> u32 {
+    let limb: u64 = <(u32, u32)>::into((0, limb));
+    let r: u64 = <(u32, u32)>::into((0, r));
+    let modulo: u64 = <(u32, u32)>::into((0, modulo));
+    let (_, r): (bool, u64) = jet::add_64(jet::left_shift_64(32, r), limb);
+    let r: u64 = jet::modulo_64(r, modulo);
+    let (_, res): (u32, u32) = <u64>::into(r);
+    res
+}
+fn reduce_256_mod_32(value: u256, modulo: u32) -> u32 {
+    let (a, b, c, d, e, f, g, h): (u32, u32, u32, u32, u32, u32, u32, u32) = split_256(value);
+    let r: u32 = reduce_limb_32_mod_32(a, 0, modulo);
+    let r: u32 = reduce_limb_32_mod_32(b, r, modulo);
+    let r: u32 = reduce_limb_32_mod_32(c, r, modulo);
+    let r: u32 = reduce_limb_32_mod_32(d, r, modulo);
+    let r: u32 = reduce_limb_32_mod_32(e, r, modulo);
+    let r: u32 = reduce_limb_32_mod_32(f, r, modulo);
+    let r: u32 = reduce_limb_32_mod_32(g, r, modulo);
+    let r: u32 = reduce_limb_32_mod_32(h, r, modulo);
+    r
+}
+fn channel_draw_32(state: ChannelState, max: u32) -> (ChannelState, u32) {
+    let value: u32 = reduce_256_mod_32(state, max);
+    (channel_mix(state), value)
+}
+fn test_channel_draw_32() {
+    let state: ChannelState = 53741377836084766287364085417998971256852254673610164556110591250061061441088;
+    let (state, value): (ChannelState, u32) = channel_draw_32(state, 8193);
+    assert!(jet::eq_32(value, 365));
+    assert!(jet::eq_256(state, 17257280192877315036328845329229606496919448857779645786470826404984163982688));
+}
+fn add_mod(a: u32, b: u32) -> u32 {
+    let lhs: u64 = <(u32, u32)>::into((0, a));
+    let rhs: u64 = <(u32, u32)>::into((0, b));
+    let (_, sum): (bool, u64) = jet::add_64(lhs, rhs);
+    let res64: u64 = jet::modulo_64(sum, 3221225473);
+    let (_, res): (u32, u32) = <u64>::into(res64);
+    res
+}
+fn sub_mod(a: u32, b: u32) -> u32 {
+    let (_, b_neg): (bool, u32) = jet::subtract_32(3221225473, b);
+    add_mod(a, b_neg)
+}
+fn mul_mod(a: u32, b: u32) -> u32 {
+    let mul: u64 = jet::multiply_32(a, b);
+    let res64: u64 = jet::modulo_64(mul, 3221225473);
+    let (_, res): (u32, u32) = <u64>::into(res64);
+    res
+}
+type ExtendedEuclideanAcc = (u32, u32, u32, u32);
+fn div_mod_step(acc: ExtendedEuclideanAcc, context: (), counter: u4) -> Either<u32, ExtendedEuclideanAcc> {
+    let (t, r, new_t, new_r): ExtendedEuclideanAcc = acc;
+    match jet::is_zero_32(new_r) {
+        true => {
+            assert!(jet::eq_32(r, 1));
+            Left(t)
+        }
+        false => {
+            let q: u32 = jet::divide_32(r, new_r);
+            let (t, new_t): (u32, u32) = (new_t, sub_mod(t, mul_mod(q, new_t)));
+            let (r, new_r): (u32, u32) = (new_r, sub_mod(r, mul_mod(q, new_r)));
+            Right((t, r, new_t, new_r))
+        }
+    }
+}
+fn div_mod_chunk(result: Either<u32, ExtendedEuclideanAcc>) -> Either<u32, ExtendedEuclideanAcc> {
+    match result {
+        Left(t: u32) => Left(t),
+        Right(acc: ExtendedEuclideanAcc) => for_while::<div_mod_step>(acc, ()),
+    }
+}
+fn div_mod(a: u32, b: u32) -> u32 {
+    let res: Either<u32, ExtendedEuclideanAcc> = for_while::<div_mod_step>((0, 3221225473, 1, b), ());
+    let res: Either<u32, ExtendedEuclideanAcc> = div_mod_chunk(res);
+    let res: Either<u32, ExtendedEuclideanAcc> = div_mod_chunk(res);
+    let t: u32 = unwrap_left::<ExtendedEuclideanAcc>(res);
+    mul_mod(a, t)
+}
+type ExpModAcc = (u32, u32, u32);
+fn exp_mod_step(acc: ExpModAcc, context: (), counter: u4) -> Either<u32, ExpModAcc> {
+    let (res, base, exp): ExpModAcc = acc;
+    match jet::is_zero_32(exp) {
+        true => Left(res),
+        false => {
+            let new_res: u32 = match jet::divides_32(2, exp) {
+                true => res,
+                false => mul_mod(res, base),
+            };
+            let new_base: u32 = mul_mod(base, base);
+            let new_exp: u32 = jet::divide_32(exp, 2);
+            Right((new_res, new_base, new_exp))
+        }
+    }
+}
+fn exp_mod_chunk(result: Either<u32, ExpModAcc>) -> Either<u32, ExpModAcc> {
+    match result {
+        Left(res: u32) => Left(res),
+        Right(acc: ExpModAcc) => for_while::<exp_mod_step>(acc, ()),
+    }
+}
+fn exp_mod(a: u32, b: u32) -> u32 {
+    let res: Either<u32, ExpModAcc> = for_while::<exp_mod_step>((1, a, b), ());
+    let res: Either<u32, ExpModAcc> = exp_mod_chunk(res);
+    let res: Either<u32, ExpModAcc> = exp_mod_chunk(res);
+    unwrap_left::<ExpModAcc>(res)
+}
+fn test_endianness() {
+    let (hi, lo): (u32, u32) = <u64>::into(4294967296);
+    assert!(jet::eq_32(hi, 1));
+    assert!(jet::eq_32(lo, 0));
+}
+fn test_add_mod() {
+    let a: u32 = 3221225473;
+    let b: u32 = 1;
+    let c: u32 = add_mod(a, b);
+    assert!(jet::eq_32(c, 1));
+}
+fn test_sub_mod() {
+    let a: u32 = 3221225473;
+    let b: u32 = 1;
+    let c: u32 = sub_mod(a, b);
+    assert!(jet::eq_32(c, 3221225472));
+}
+fn test_mul_mod() {
+    let a: u32 = 56756;
+    let b: u32 = 56756;
+    let c: u32 = mul_mod(a, b);
+    assert!(jet::eq_32(c, 18063));
+}
+fn test_mul_mod_2() {
+    let a: u32 = 1734477367;
+    let b: u32 = 1033050121;
+    let c: u32 = mul_mod(a, b);
+    assert!(jet::eq_32(c, 510964216));
+}
+fn test_div_mod() {
+    let a: u32 = 124245436;
+    let b: u32 = 980943291;
+    let c: u32 = div_mod(a, b);
+    let d: u32 = mul_mod(c, b);
+    assert!(jet::eq_32(d, a));
+}
+fn test_div_mod_2() {
+    let a: u32 = 2915689029;
+    let b: u32 = 1944025131;
+    let c: u32 = div_mod(a, b);
+    assert!(jet::eq_32(c, 3199116755));
+}
+fn test_exp_mod() {
+    let a: u32 = 2;
+    let b: u32 = 32;
+    let c: u32 = exp_mod(a, b);
+    assert!(jet::eq_32(c, 1073741823));
+}
+fn test_exp_mod_2() {
+    let a: u32 = 1734477367;
+    let b: u32 = 365;
+    let c: u32 = exp_mod(a, b);
+    assert!(jet::eq_32(c, 1033050121));
+}
+type TraceRow = (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32);
+type FixedRow = [u32; 16];
+type MerkleAcc = (u256, u32);
+fn hash_trace_row(row: TraceRow) -> u256 {
+    let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15): TraceRow = row;
+    let ctx: Ctx8 = jet::sha_256_ctx_8_init();
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v0);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v1);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v2);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v3);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v4);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v5);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v6);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v7);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v8);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v9);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v10);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v11);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v12);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v13);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v14);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v15);
+    jet::sha_256_ctx_8_finalize(ctx)
+}
+fn hash_fixed_row(row: FixedRow) -> u256 {
+    let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15): (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) = <[u32; 16]>::into(row);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_init();
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v0);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v1);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v2);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v3);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v4);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v5);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v6);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v7);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v8);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v9);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v10);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v11);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v12);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v13);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v14);
+    let ctx: Ctx8 = jet::sha_256_ctx_8_add_4(ctx, v15);
+    jet::sha_256_ctx_8_finalize(ctx)
+}
+fn merkle_step(sibling: u256, acc: MerkleAcc) -> MerkleAcc {
+    let (current, path): MerkleAcc = acc;
+    let next: u256 = match jet::divides_32(2, path) {
+        false => sha256_pair(sibling, current),
+        true => sha256_pair(current, sibling),
+    };
+    (next, jet::divide_32(path, 2))
+}
+fn merkle_verify_1(leaf: u256, path: u32, proof: u256, root: u256) {
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(proof, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_2(leaf: u256, path: u32, proof: (u256, u256), root: u256) {
+    let (p0, p1): (u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_3(leaf: u256, path: u32, proof: (u256, u256, u256), root: u256) {
+    let (p0, p1, p2): (u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_4(leaf: u256, path: u32, proof: (u256, u256, u256, u256), root: u256) {
+    let (p0, p1, p2, p3): (u256, u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let acc: MerkleAcc = merkle_step(p3, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_5(leaf: u256, path: u32, proof: (u256, u256, u256, u256, u256), root: u256) {
+    let (p0, p1, p2, p3, p4): (u256, u256, u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let acc: MerkleAcc = merkle_step(p3, acc);
+    let acc: MerkleAcc = merkle_step(p4, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_6(leaf: u256, path: u32, proof: (u256, u256, u256, u256, u256, u256), root: u256) {
+    let (p0, p1, p2, p3, p4, p5): (u256, u256, u256, u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let acc: MerkleAcc = merkle_step(p3, acc);
+    let acc: MerkleAcc = merkle_step(p4, acc);
+    let acc: MerkleAcc = merkle_step(p5, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_7(leaf: u256, path: u32, proof: (u256, u256, u256, u256, u256, u256, u256), root: u256) {
+    let (p0, p1, p2, p3, p4, p5, p6): (u256, u256, u256, u256, u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let acc: MerkleAcc = merkle_step(p3, acc);
+    let acc: MerkleAcc = merkle_step(p4, acc);
+    let acc: MerkleAcc = merkle_step(p5, acc);
+    let acc: MerkleAcc = merkle_step(p6, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_8(leaf: u256, path: u32, proof: (u256, u256, u256, u256, u256, u256, u256, u256), root: u256) {
+    let (p0, p1, p2, p3, p4, p5, p6, p7): (u256, u256, u256, u256, u256, u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let acc: MerkleAcc = merkle_step(p3, acc);
+    let acc: MerkleAcc = merkle_step(p4, acc);
+    let acc: MerkleAcc = merkle_step(p5, acc);
+    let acc: MerkleAcc = merkle_step(p6, acc);
+    let acc: MerkleAcc = merkle_step(p7, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_9(leaf: u256, path: u32, proof: (u256, u256, u256, u256, u256, u256, u256, u256, u256), root: u256) {
+    let (p0, p1, p2, p3, p4, p5, p6, p7, p8): (u256, u256, u256, u256, u256, u256, u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let acc: MerkleAcc = merkle_step(p3, acc);
+    let acc: MerkleAcc = merkle_step(p4, acc);
+    let acc: MerkleAcc = merkle_step(p5, acc);
+    let acc: MerkleAcc = merkle_step(p6, acc);
+    let acc: MerkleAcc = merkle_step(p7, acc);
+    let acc: MerkleAcc = merkle_step(p8, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_10(leaf: u256, path: u32, proof: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256), root: u256) {
+    let (p0, p1, p2, p3, p4, p5, p6, p7, p8, p9): (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let acc: MerkleAcc = merkle_step(p3, acc);
+    let acc: MerkleAcc = merkle_step(p4, acc);
+    let acc: MerkleAcc = merkle_step(p5, acc);
+    let acc: MerkleAcc = merkle_step(p6, acc);
+    let acc: MerkleAcc = merkle_step(p7, acc);
+    let acc: MerkleAcc = merkle_step(p8, acc);
+    let acc: MerkleAcc = merkle_step(p9, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_11(leaf: u256, path: u32, proof: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256), root: u256) {
+    let (p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10): (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let acc: MerkleAcc = merkle_step(p3, acc);
+    let acc: MerkleAcc = merkle_step(p4, acc);
+    let acc: MerkleAcc = merkle_step(p5, acc);
+    let acc: MerkleAcc = merkle_step(p6, acc);
+    let acc: MerkleAcc = merkle_step(p7, acc);
+    let acc: MerkleAcc = merkle_step(p8, acc);
+    let acc: MerkleAcc = merkle_step(p9, acc);
+    let acc: MerkleAcc = merkle_step(p10, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_12(leaf: u256, path: u32, proof: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256), root: u256) {
+    let (p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11): (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let acc: MerkleAcc = merkle_step(p3, acc);
+    let acc: MerkleAcc = merkle_step(p4, acc);
+    let acc: MerkleAcc = merkle_step(p5, acc);
+    let acc: MerkleAcc = merkle_step(p6, acc);
+    let acc: MerkleAcc = merkle_step(p7, acc);
+    let acc: MerkleAcc = merkle_step(p8, acc);
+    let acc: MerkleAcc = merkle_step(p9, acc);
+    let acc: MerkleAcc = merkle_step(p10, acc);
+    let acc: MerkleAcc = merkle_step(p11, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_13(leaf: u256, path: u32, proof: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256), root: u256) {
+    let (p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12): (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let acc: MerkleAcc = merkle_step(p3, acc);
+    let acc: MerkleAcc = merkle_step(p4, acc);
+    let acc: MerkleAcc = merkle_step(p5, acc);
+    let acc: MerkleAcc = merkle_step(p6, acc);
+    let acc: MerkleAcc = merkle_step(p7, acc);
+    let acc: MerkleAcc = merkle_step(p8, acc);
+    let acc: MerkleAcc = merkle_step(p9, acc);
+    let acc: MerkleAcc = merkle_step(p10, acc);
+    let acc: MerkleAcc = merkle_step(p11, acc);
+    let acc: MerkleAcc = merkle_step(p12, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_14(leaf: u256, path: u32, proof: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256), root: u256) {
+    let (p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13): (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let acc: MerkleAcc = merkle_step(p3, acc);
+    let acc: MerkleAcc = merkle_step(p4, acc);
+    let acc: MerkleAcc = merkle_step(p5, acc);
+    let acc: MerkleAcc = merkle_step(p6, acc);
+    let acc: MerkleAcc = merkle_step(p7, acc);
+    let acc: MerkleAcc = merkle_step(p8, acc);
+    let acc: MerkleAcc = merkle_step(p9, acc);
+    let acc: MerkleAcc = merkle_step(p10, acc);
+    let acc: MerkleAcc = merkle_step(p11, acc);
+    let acc: MerkleAcc = merkle_step(p12, acc);
+    let acc: MerkleAcc = merkle_step(p13, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_15(leaf: u256, path: u32, proof: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256), root: u256) {
+    let (p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14): (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let acc: MerkleAcc = merkle_step(p3, acc);
+    let acc: MerkleAcc = merkle_step(p4, acc);
+    let acc: MerkleAcc = merkle_step(p5, acc);
+    let acc: MerkleAcc = merkle_step(p6, acc);
+    let acc: MerkleAcc = merkle_step(p7, acc);
+    let acc: MerkleAcc = merkle_step(p8, acc);
+    let acc: MerkleAcc = merkle_step(p9, acc);
+    let acc: MerkleAcc = merkle_step(p10, acc);
+    let acc: MerkleAcc = merkle_step(p11, acc);
+    let acc: MerkleAcc = merkle_step(p12, acc);
+    let acc: MerkleAcc = merkle_step(p13, acc);
+    let acc: MerkleAcc = merkle_step(p14, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_16(leaf: u256, path: u32, proof: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256), root: u256) {
+    let (p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15): (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let acc: MerkleAcc = merkle_step(p3, acc);
+    let acc: MerkleAcc = merkle_step(p4, acc);
+    let acc: MerkleAcc = merkle_step(p5, acc);
+    let acc: MerkleAcc = merkle_step(p6, acc);
+    let acc: MerkleAcc = merkle_step(p7, acc);
+    let acc: MerkleAcc = merkle_step(p8, acc);
+    let acc: MerkleAcc = merkle_step(p9, acc);
+    let acc: MerkleAcc = merkle_step(p10, acc);
+    let acc: MerkleAcc = merkle_step(p11, acc);
+    let acc: MerkleAcc = merkle_step(p12, acc);
+    let acc: MerkleAcc = merkle_step(p13, acc);
+    let acc: MerkleAcc = merkle_step(p14, acc);
+    let acc: MerkleAcc = merkle_step(p15, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn merkle_verify_17(leaf: u256, path: u32, proof: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256), root: u256) {
+    let (p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16): (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = proof;
+    let acc: MerkleAcc = (leaf, path);
+    let acc: MerkleAcc = merkle_step(p0, acc);
+    let acc: MerkleAcc = merkle_step(p1, acc);
+    let acc: MerkleAcc = merkle_step(p2, acc);
+    let acc: MerkleAcc = merkle_step(p3, acc);
+    let acc: MerkleAcc = merkle_step(p4, acc);
+    let acc: MerkleAcc = merkle_step(p5, acc);
+    let acc: MerkleAcc = merkle_step(p6, acc);
+    let acc: MerkleAcc = merkle_step(p7, acc);
+    let acc: MerkleAcc = merkle_step(p8, acc);
+    let acc: MerkleAcc = merkle_step(p9, acc);
+    let acc: MerkleAcc = merkle_step(p10, acc);
+    let acc: MerkleAcc = merkle_step(p11, acc);
+    let acc: MerkleAcc = merkle_step(p12, acc);
+    let acc: MerkleAcc = merkle_step(p13, acc);
+    let acc: MerkleAcc = merkle_step(p14, acc);
+    let acc: MerkleAcc = merkle_step(p15, acc);
+    let acc: MerkleAcc = merkle_step(p16, acc);
+    let (computed, _): MerkleAcc = acc;
+    assert!(jet::eq_256(computed, root));
+}
+fn composition_numerator(current: TraceRow, next: TraceRow, fixed: FixedRow, alpha: u32) -> u32 {
+    let (s0, s1, s2, s3, s4, s5, s6, s7, r0, r1, r2, r3, r4, r5, r6, r7): TraceRow = current;
+    let (n0, n1, n2, n3, n4, n5, n6, n7, nr0, nr1, nr2, nr3, nr4, nr5, nr6, nr7): TraceRow = next;
+    let (init, perm, rehash, acc_phase, new_chain, switch_signer, final_phase, idle, c0, c1, c2, c3, c4, c5, c6, c7): (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) = <[u32; 16]>::into(fixed);
+    let x0: u32 = add_mod(s0, c0);
+    let x0_2: u32 = mul_mod(x0, x0);
+    let x0_4: u32 = mul_mod(x0_2, x0_2);
+    let x0_5: u32 = mul_mod(x0_4, x0);
+    let x1: u32 = add_mod(s1, c1);
+    let x1_2: u32 = mul_mod(x1, x1);
+    let x1_4: u32 = mul_mod(x1_2, x1_2);
+    let x1_5: u32 = mul_mod(x1_4, x1);
+    let x2: u32 = add_mod(s2, c2);
+    let x2_2: u32 = mul_mod(x2, x2);
+    let x2_4: u32 = mul_mod(x2_2, x2_2);
+    let x2_5: u32 = mul_mod(x2_4, x2);
+    let x3: u32 = add_mod(s3, c3);
+    let x3_2: u32 = mul_mod(x3, x3);
+    let x3_4: u32 = mul_mod(x3_2, x3_2);
+    let x3_5: u32 = mul_mod(x3_4, x3);
+    let x4: u32 = add_mod(s4, c4);
+    let x4_2: u32 = mul_mod(x4, x4);
+    let x4_4: u32 = mul_mod(x4_2, x4_2);
+    let x4_5: u32 = mul_mod(x4_4, x4);
+    let x5: u32 = add_mod(s5, c5);
+    let x5_2: u32 = mul_mod(x5, x5);
+    let x5_4: u32 = mul_mod(x5_2, x5_2);
+    let x5_5: u32 = mul_mod(x5_4, x5);
+    let x6: u32 = add_mod(s6, c6);
+    let x6_2: u32 = mul_mod(x6, x6);
+    let x6_4: u32 = mul_mod(x6_2, x6_2);
+    let x6_5: u32 = mul_mod(x6_4, x6);
+    let x7: u32 = add_mod(s7, c7);
+    let x7_2: u32 = mul_mod(x7, x7);
+    let x7_4: u32 = mul_mod(x7_2, x7_2);
+    let x7_5: u32 = mul_mod(x7_4, x7);
+    let residual_0: u32 = sub_mod(s4, 101);
+    let residual_1: u32 = sub_mod(s5, 211);
+    let residual_2: u32 = sub_mod(s6, 307);
+    let residual_3: u32 = sub_mod(s7, 401);
+    let residual_4: u32 = sub_mod(r0, 503);
+    let residual_5: u32 = sub_mod(r1, 601);
+    let residual_6: u32 = sub_mod(r2, 701);
+    let residual_7: u32 = sub_mod(r3, 809);
+    let residual_8: u32 = sub_mod(r4, 907);
+    let residual_9: u32 = sub_mod(r5, 1009);
+    let residual_10: u32 = sub_mod(r6, 1103);
+    let residual_11: u32 = sub_mod(r7, 1201);
+    let residual_12: u32 = sub_mod(n0, add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(mul_mod(966367642, x0_5), mul_mod(2342709435, x1_5)), mul_mod(2952790017, x2_5)), mul_mod(1734506024, x3_5)), mul_mod(1150437669, x4_5)), mul_mod(1717986919, x5_5)), mul_mod(3019898881, x6_5)), mul_mod(2652773919, x7_5)));
+    let residual_13: u32 = sub_mod(n1, add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(mul_mod(2342709435, x0_5), mul_mod(2952790017, x1_5)), mul_mod(1734506024, x2_5)), mul_mod(1150437669, x3_5)), mul_mod(1717986919, x4_5)), mul_mod(3019898881, x5_5)), mul_mod(2652773919, x6_5)), mul_mod(1968526678, x7_5)));
+    let residual_14: u32 = sub_mod(n2, add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(mul_mod(2952790017, x0_5), mul_mod(1734506024, x1_5)), mul_mod(1150437669, x2_5)), mul_mod(1717986919, x3_5)), mul_mod(3019898881, x4_5)), mul_mod(2652773919, x5_5)), mul_mod(1968526678, x6_5)), mul_mod(847690914, x7_5)));
+    let residual_15: u32 = sub_mod(n3, add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(mul_mod(1734506024, x0_5), mul_mod(1150437669, x1_5)), mul_mod(1717986919, x2_5)), mul_mod(3019898881, x3_5)), mul_mod(2652773919, x4_5)), mul_mod(1968526678, x5_5)), mul_mod(847690914, x6_5)), mul_mod(483183821, x7_5)));
+    let residual_16: u32 = sub_mod(n4, add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(mul_mod(1150437669, x0_5), mul_mod(1717986919, x1_5)), mul_mod(3019898881, x2_5)), mul_mod(2652773919, x3_5)), mul_mod(1968526678, x4_5)), mul_mod(847690914, x5_5)), mul_mod(483183821, x6_5)), mul_mod(766958446, x7_5)));
+    let residual_17: u32 = sub_mod(n5, add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(mul_mod(1717986919, x0_5), mul_mod(3019898881, x1_5)), mul_mod(2652773919, x2_5)), mul_mod(1968526678, x3_5)), mul_mod(847690914, x4_5)), mul_mod(483183821, x5_5)), mul_mod(766958446, x6_5)), mul_mod(2781967454, x7_5)));
+    let residual_18: u32 = sub_mod(n6, add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(mul_mod(3019898881, x0_5), mul_mod(2652773919, x1_5)), mul_mod(1968526678, x2_5)), mul_mod(847690914, x3_5)), mul_mod(483183821, x4_5)), mul_mod(766958446, x5_5)), mul_mod(2781967454, x6_5)), mul_mod(2240852503, x7_5)));
+    let residual_19: u32 = sub_mod(n7, add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(add_mod(mul_mod(2652773919, x0_5), mul_mod(1968526678, x1_5)), mul_mod(847690914, x2_5)), mul_mod(483183821, x3_5)), mul_mod(766958446, x4_5)), mul_mod(2781967454, x5_5)), mul_mod(2240852503, x6_5)), mul_mod(3087007745, x7_5)));
+    let residual_20: u32 = sub_mod(nr0, r0);
+    let residual_21: u32 = sub_mod(nr1, r1);
+    let residual_22: u32 = sub_mod(nr2, r2);
+    let residual_23: u32 = sub_mod(nr3, r3);
+    let residual_24: u32 = sub_mod(nr4, r4);
+    let residual_25: u32 = sub_mod(nr5, r5);
+    let residual_26: u32 = sub_mod(nr6, r6);
+    let residual_27: u32 = sub_mod(nr7, r7);
+    let residual_28: u32 = sub_mod(n0, s0);
+    let residual_29: u32 = sub_mod(n1, s1);
+    let residual_30: u32 = sub_mod(n2, s2);
+    let residual_31: u32 = sub_mod(n3, s3);
+    let residual_32: u32 = sub_mod(n4, 101);
+    let residual_33: u32 = sub_mod(n5, 211);
+    let residual_34: u32 = sub_mod(n6, 307);
+    let residual_35: u32 = sub_mod(n7, 401);
+    let residual_36: u32 = sub_mod(nr0, r0);
+    let residual_37: u32 = sub_mod(nr1, r1);
+    let residual_38: u32 = sub_mod(nr2, r2);
+    let residual_39: u32 = sub_mod(nr3, r3);
+    let residual_40: u32 = sub_mod(nr4, r4);
+    let residual_41: u32 = sub_mod(nr5, r5);
+    let residual_42: u32 = sub_mod(nr6, r6);
+    let residual_43: u32 = sub_mod(nr7, r7);
+    let residual_44: u32 = sub_mod(n0, add_mod(r0, s0));
+    let residual_45: u32 = sub_mod(n1, add_mod(r1, s1));
+    let residual_46: u32 = sub_mod(n2, add_mod(r2, s2));
+    let residual_47: u32 = sub_mod(n3, add_mod(r3, s3));
+    let residual_48: u32 = sub_mod(n4, r4);
+    let residual_49: u32 = sub_mod(n5, r5);
+    let residual_50: u32 = sub_mod(n6, r6);
+    let residual_51: u32 = sub_mod(n7, r7);
+    let residual_52: u32 = sub_mod(nr0, r0);
+    let residual_53: u32 = sub_mod(nr1, r1);
+    let residual_54: u32 = sub_mod(nr2, r2);
+    let residual_55: u32 = sub_mod(nr3, r3);
+    let residual_56: u32 = sub_mod(nr4, r4);
+    let residual_57: u32 = sub_mod(nr5, r5);
+    let residual_58: u32 = sub_mod(nr6, r6);
+    let residual_59: u32 = sub_mod(nr7, r7);
+    let residual_60: u32 = sub_mod(n4, 101);
+    let residual_61: u32 = sub_mod(n5, 211);
+    let residual_62: u32 = sub_mod(n6, 307);
+    let residual_63: u32 = sub_mod(n7, 401);
+    let residual_64: u32 = sub_mod(nr0, s0);
+    let residual_65: u32 = sub_mod(nr1, s1);
+    let residual_66: u32 = sub_mod(nr2, s2);
+    let residual_67: u32 = sub_mod(nr3, s3);
+    let residual_68: u32 = sub_mod(nr4, s4);
+    let residual_69: u32 = sub_mod(nr5, s5);
+    let residual_70: u32 = sub_mod(nr6, s6);
+    let residual_71: u32 = sub_mod(nr7, s7);
+    let residual_72: u32 = sub_mod(s0, 2798398074);
+    let residual_73: u32 = sub_mod(s1, 1750402816);
+    let residual_74: u32 = sub_mod(s2, 1573801924);
+    let residual_75: u32 = sub_mod(s3, 227438202);
+    let residual_76: u32 = sub_mod(s4, 1568678091);
+    let residual_77: u32 = sub_mod(s5, 2392437630);
+    let residual_78: u32 = sub_mod(s6, 1838680306);
+    let residual_79: u32 = sub_mod(s7, 2099180100);
+    let residual_80: u32 = sub_mod(n4, 101);
+    let residual_81: u32 = sub_mod(n5, 211);
+    let residual_82: u32 = sub_mod(n6, 307);
+    let residual_83: u32 = sub_mod(n7, 401);
+    let residual_84: u32 = sub_mod(nr0, 503);
+    let residual_85: u32 = sub_mod(nr1, 601);
+    let residual_86: u32 = sub_mod(nr2, 701);
+    let residual_87: u32 = sub_mod(nr3, 809);
+    let residual_88: u32 = sub_mod(nr4, 907);
+    let residual_89: u32 = sub_mod(nr5, 1009);
+    let residual_90: u32 = sub_mod(nr6, 1103);
+    let residual_91: u32 = sub_mod(nr7, 1201);
+    let residual_92: u32 = sub_mod(s0, 1762720877);
+    let residual_93: u32 = sub_mod(s1, 1424491707);
+    let residual_94: u32 = sub_mod(s2, 2765386881);
+    let residual_95: u32 = sub_mod(s3, 2309495339);
+    let residual_96: u32 = sub_mod(s4, 144343816);
+    let residual_97: u32 = sub_mod(s5, 1306742547);
+    let residual_98: u32 = sub_mod(s6, 2103047842);
+    let residual_99: u32 = sub_mod(s7, 1193299591);
+    let residual_100: u32 = sub_mod(n0, s0);
+    let residual_101: u32 = sub_mod(n1, s1);
+    let residual_102: u32 = sub_mod(n2, s2);
+    let residual_103: u32 = sub_mod(n3, s3);
+    let residual_104: u32 = sub_mod(n4, s4);
+    let residual_105: u32 = sub_mod(n5, s5);
+    let residual_106: u32 = sub_mod(n6, s6);
+    let residual_107: u32 = sub_mod(n7, s7);
+    let residual_108: u32 = sub_mod(nr0, r0);
+    let residual_109: u32 = sub_mod(nr1, r1);
+    let residual_110: u32 = sub_mod(nr2, r2);
+    let residual_111: u32 = sub_mod(nr3, r3);
+    let residual_112: u32 = sub_mod(nr4, r4);
+    let residual_113: u32 = sub_mod(nr5, r5);
+    let residual_114: u32 = sub_mod(nr6, r6);
+    let residual_115: u32 = sub_mod(nr7, r7);
+    let group_0: u32 = 0;
+    let group_0: u32 = add_mod(residual_11, mul_mod(alpha, group_0));
+    let group_0: u32 = add_mod(residual_10, mul_mod(alpha, group_0));
+    let group_0: u32 = add_mod(residual_9, mul_mod(alpha, group_0));
+    let group_0: u32 = add_mod(residual_8, mul_mod(alpha, group_0));
+    let group_0: u32 = add_mod(residual_7, mul_mod(alpha, group_0));
+    let group_0: u32 = add_mod(residual_6, mul_mod(alpha, group_0));
+    let group_0: u32 = add_mod(residual_5, mul_mod(alpha, group_0));
+    let group_0: u32 = add_mod(residual_4, mul_mod(alpha, group_0));
+    let group_0: u32 = add_mod(residual_3, mul_mod(alpha, group_0));
+    let group_0: u32 = add_mod(residual_2, mul_mod(alpha, group_0));
+    let group_0: u32 = add_mod(residual_1, mul_mod(alpha, group_0));
+    let group_0: u32 = add_mod(residual_0, mul_mod(alpha, group_0));
+    let group_0: u32 = mul_mod(init, group_0);
+    let group_1: u32 = 0;
+    let group_1: u32 = add_mod(residual_27, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_26, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_25, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_24, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_23, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_22, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_21, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_20, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_19, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_18, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_17, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_16, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_15, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_14, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_13, mul_mod(alpha, group_1));
+    let group_1: u32 = add_mod(residual_12, mul_mod(alpha, group_1));
+    let group_1: u32 = mul_mod(perm, group_1);
+    let group_2: u32 = 0;
+    let group_2: u32 = add_mod(residual_43, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_42, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_41, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_40, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_39, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_38, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_37, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_36, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_35, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_34, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_33, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_32, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_31, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_30, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_29, mul_mod(alpha, group_2));
+    let group_2: u32 = add_mod(residual_28, mul_mod(alpha, group_2));
+    let group_2: u32 = mul_mod(rehash, group_2);
+    let group_3: u32 = 0;
+    let group_3: u32 = add_mod(residual_59, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_58, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_57, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_56, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_55, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_54, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_53, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_52, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_51, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_50, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_49, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_48, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_47, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_46, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_45, mul_mod(alpha, group_3));
+    let group_3: u32 = add_mod(residual_44, mul_mod(alpha, group_3));
+    let group_3: u32 = mul_mod(acc_phase, group_3);
+    let group_4: u32 = 0;
+    let group_4: u32 = add_mod(residual_71, mul_mod(alpha, group_4));
+    let group_4: u32 = add_mod(residual_70, mul_mod(alpha, group_4));
+    let group_4: u32 = add_mod(residual_69, mul_mod(alpha, group_4));
+    let group_4: u32 = add_mod(residual_68, mul_mod(alpha, group_4));
+    let group_4: u32 = add_mod(residual_67, mul_mod(alpha, group_4));
+    let group_4: u32 = add_mod(residual_66, mul_mod(alpha, group_4));
+    let group_4: u32 = add_mod(residual_65, mul_mod(alpha, group_4));
+    let group_4: u32 = add_mod(residual_64, mul_mod(alpha, group_4));
+    let group_4: u32 = add_mod(residual_63, mul_mod(alpha, group_4));
+    let group_4: u32 = add_mod(residual_62, mul_mod(alpha, group_4));
+    let group_4: u32 = add_mod(residual_61, mul_mod(alpha, group_4));
+    let group_4: u32 = add_mod(residual_60, mul_mod(alpha, group_4));
+    let group_4: u32 = mul_mod(new_chain, group_4);
+    let group_5: u32 = 0;
+    let group_5: u32 = add_mod(residual_91, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_90, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_89, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_88, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_87, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_86, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_85, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_84, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_83, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_82, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_81, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_80, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_79, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_78, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_77, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_76, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_75, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_74, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_73, mul_mod(alpha, group_5));
+    let group_5: u32 = add_mod(residual_72, mul_mod(alpha, group_5));
+    let group_5: u32 = mul_mod(switch_signer, group_5);
+    let group_6: u32 = 0;
+    let group_6: u32 = add_mod(residual_99, mul_mod(alpha, group_6));
+    let group_6: u32 = add_mod(residual_98, mul_mod(alpha, group_6));
+    let group_6: u32 = add_mod(residual_97, mul_mod(alpha, group_6));
+    let group_6: u32 = add_mod(residual_96, mul_mod(alpha, group_6));
+    let group_6: u32 = add_mod(residual_95, mul_mod(alpha, group_6));
+    let group_6: u32 = add_mod(residual_94, mul_mod(alpha, group_6));
+    let group_6: u32 = add_mod(residual_93, mul_mod(alpha, group_6));
+    let group_6: u32 = add_mod(residual_92, mul_mod(alpha, group_6));
+    let group_6: u32 = mul_mod(final_phase, group_6);
+    let group_7: u32 = 0;
+    let group_7: u32 = add_mod(residual_115, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_114, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_113, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_112, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_111, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_110, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_109, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_108, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_107, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_106, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_105, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_104, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_103, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_102, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_101, mul_mod(alpha, group_7));
+    let group_7: u32 = add_mod(residual_100, mul_mod(alpha, group_7));
+    let group_7: u32 = mul_mod(idle, group_7);
+    let acc: u32 = 0;
+    let acc: u32 = add_mod(group_7, mul_mod(alpha, acc));
+    let acc: u32 = add_mod(group_6, mul_mod(alpha, acc));
+    let acc: u32 = add_mod(group_5, mul_mod(alpha, acc));
+    let acc: u32 = add_mod(group_4, mul_mod(alpha, acc));
+    let acc: u32 = add_mod(group_3, mul_mod(alpha, acc));
+    let acc: u32 = add_mod(group_2, mul_mod(alpha, acc));
+    let acc: u32 = add_mod(group_1, mul_mod(alpha, acc));
+    let acc: u32 = add_mod(group_0, mul_mod(alpha, acc));
+    acc
+}
+fn main() {
+    let trace_root: u256 = witness::TRACE_ROOT;
+    let current: TraceRow = witness::TRACE_ROW;
+    let next: TraceRow = witness::TRACE_NEXT_ROW;
+    let fixed: FixedRow = witness::FIXED_ROW;
+    let trace_path: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::TRACE_PATH;
+    let next_path: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::TRACE_NEXT_PATH;
+    let fixed_path: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FIXED_PATH;
+    let last: u32 = witness::FRI_LAST;
+    let cp: u32 = witness::FRI_COMPOSITION;
+    let x_inv: u32 = witness::DOMAIN_X_INVERSE;
+    let state: ChannelState = sha256(0xc5bfb8fe204efe0c4c5b3317c94e74574bb67dff6a1e5020d925b7ada487706c);
+    let state: ChannelState = channel_mix_256(state, 0x47a086b953fff263d54734b979820479602f872c609daecaed2eda7df3d02194);
+    let state: ChannelState = channel_mix_256(state, trace_root);
+    let (state, alpha): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root0: u256 = witness::FRI_ROOT_0;
+    let state: ChannelState = channel_mix_256(state, root0);
+    let (state, beta0): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root1: u256 = witness::FRI_ROOT_1;
+    let state: ChannelState = channel_mix_256(state, root1);
+    let (state, beta1): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root2: u256 = witness::FRI_ROOT_2;
+    let state: ChannelState = channel_mix_256(state, root2);
+    let (state, beta2): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root3: u256 = witness::FRI_ROOT_3;
+    let state: ChannelState = channel_mix_256(state, root3);
+    let (state, beta3): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root4: u256 = witness::FRI_ROOT_4;
+    let state: ChannelState = channel_mix_256(state, root4);
+    let (state, beta4): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root5: u256 = witness::FRI_ROOT_5;
+    let state: ChannelState = channel_mix_256(state, root5);
+    let (state, beta5): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root6: u256 = witness::FRI_ROOT_6;
+    let state: ChannelState = channel_mix_256(state, root6);
+    let (state, beta6): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root7: u256 = witness::FRI_ROOT_7;
+    let state: ChannelState = channel_mix_256(state, root7);
+    let (state, beta7): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root8: u256 = witness::FRI_ROOT_8;
+    let state: ChannelState = channel_mix_256(state, root8);
+    let (state, beta8): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root9: u256 = witness::FRI_ROOT_9;
+    let state: ChannelState = channel_mix_256(state, root9);
+    let (state, beta9): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root10: u256 = witness::FRI_ROOT_10;
+    let state: ChannelState = channel_mix_256(state, root10);
+    let (state, beta10): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root11: u256 = witness::FRI_ROOT_11;
+    let state: ChannelState = channel_mix_256(state, root11);
+    let (state, beta11): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root12: u256 = witness::FRI_ROOT_12;
+    let state: ChannelState = channel_mix_256(state, root12);
+    let (state, beta12): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root13: u256 = witness::FRI_ROOT_13;
+    let state: ChannelState = channel_mix_256(state, root13);
+    let (state, beta13): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root14: u256 = witness::FRI_ROOT_14;
+    let state: ChannelState = channel_mix_256(state, root14);
+    let (state, beta14): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root15: u256 = witness::FRI_ROOT_15;
+    let state: ChannelState = channel_mix_256(state, root15);
+    let (state, beta15): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let root16: u256 = witness::FRI_ROOT_16;
+    let state: ChannelState = channel_mix_256(state, root16);
+    let (state, beta16): (ChannelState, u32) = channel_draw_32(state, 3221225473);
+    let state: ChannelState = channel_mix_32(state, last);
+    let (_, idx): (ChannelState, u32) = channel_draw_32(state, 131072);
+    let (_, trace_auth): (bool, u32) = jet::add_32(idx, 131072);
+    merkle_verify_17(hash_trace_row(current), trace_auth, trace_path, trace_root);
+    let (_, next_idx): (bool, u32) = jet::add_32(idx, 8);
+    let next_idx: u32 = jet::modulo_32(next_idx, 131072);
+    let (_, next_auth): (bool, u32) = jet::add_32(next_idx, 131072);
+    merkle_verify_17(hash_trace_row(next), next_auth, next_path, trace_root);
+    let (_, fixed_auth): (bool, u32) = jet::add_32(idx, 131072);
+    merkle_verify_17(hash_fixed_row(fixed), fixed_auth, fixed_path, 0x47a086b953fff263d54734b979820479602f872c609daecaed2eda7df3d02194);
+    let numerator: u32 = composition_numerator(current, next, fixed, alpha);
+    let x: u32 = mul_mod(5, exp_mod(1800384970, idx));
+    assert!(jet::eq_32(mul_mod(x, x_inv), 1));
+    let denominator: u32 = sub_mod(exp_mod(x, 16384), 1);
+    assert!(jet::eq_32(mul_mod(cp, denominator), numerator));
+    let domain_size: u32 = 131072;
+    let a0: u32 = witness::FRI_A_0;
+    let path_a0: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_A_0;
+    let b0: u32 = witness::FRI_B_0;
+    let path_b0: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_B_0;
+    assert!(jet::eq_32(cp, a0));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_17(sha256_32(a0), path_a, path_a0, root0);
+    merkle_verify_17(sha256_32(b0), path_b, path_b0, root0);
+    let even: u32 = mul_mod(add_mod(a0, b0), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a0, b0), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta0, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a1: u32 = witness::FRI_A_1;
+    let path_a1: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_A_1;
+    let b1: u32 = witness::FRI_B_1;
+    let path_b1: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_B_1;
+    assert!(jet::eq_32(cp, a1));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_16(sha256_32(a1), path_a, path_a1, root1);
+    merkle_verify_16(sha256_32(b1), path_b, path_b1, root1);
+    let even: u32 = mul_mod(add_mod(a1, b1), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a1, b1), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta1, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a2: u32 = witness::FRI_A_2;
+    let path_a2: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_A_2;
+    let b2: u32 = witness::FRI_B_2;
+    let path_b2: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_B_2;
+    assert!(jet::eq_32(cp, a2));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_15(sha256_32(a2), path_a, path_a2, root2);
+    merkle_verify_15(sha256_32(b2), path_b, path_b2, root2);
+    let even: u32 = mul_mod(add_mod(a2, b2), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a2, b2), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta2, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a3: u32 = witness::FRI_A_3;
+    let path_a3: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_A_3;
+    let b3: u32 = witness::FRI_B_3;
+    let path_b3: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_B_3;
+    assert!(jet::eq_32(cp, a3));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_14(sha256_32(a3), path_a, path_a3, root3);
+    merkle_verify_14(sha256_32(b3), path_b, path_b3, root3);
+    let even: u32 = mul_mod(add_mod(a3, b3), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a3, b3), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta3, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a4: u32 = witness::FRI_A_4;
+    let path_a4: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_A_4;
+    let b4: u32 = witness::FRI_B_4;
+    let path_b4: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_B_4;
+    assert!(jet::eq_32(cp, a4));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_13(sha256_32(a4), path_a, path_a4, root4);
+    merkle_verify_13(sha256_32(b4), path_b, path_b4, root4);
+    let even: u32 = mul_mod(add_mod(a4, b4), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a4, b4), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta4, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a5: u32 = witness::FRI_A_5;
+    let path_a5: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_A_5;
+    let b5: u32 = witness::FRI_B_5;
+    let path_b5: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_B_5;
+    assert!(jet::eq_32(cp, a5));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_12(sha256_32(a5), path_a, path_a5, root5);
+    merkle_verify_12(sha256_32(b5), path_b, path_b5, root5);
+    let even: u32 = mul_mod(add_mod(a5, b5), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a5, b5), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta5, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a6: u32 = witness::FRI_A_6;
+    let path_a6: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_A_6;
+    let b6: u32 = witness::FRI_B_6;
+    let path_b6: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_B_6;
+    assert!(jet::eq_32(cp, a6));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_11(sha256_32(a6), path_a, path_a6, root6);
+    merkle_verify_11(sha256_32(b6), path_b, path_b6, root6);
+    let even: u32 = mul_mod(add_mod(a6, b6), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a6, b6), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta6, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a7: u32 = witness::FRI_A_7;
+    let path_a7: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_A_7;
+    let b7: u32 = witness::FRI_B_7;
+    let path_b7: (u256, u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_B_7;
+    assert!(jet::eq_32(cp, a7));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_10(sha256_32(a7), path_a, path_a7, root7);
+    merkle_verify_10(sha256_32(b7), path_b, path_b7, root7);
+    let even: u32 = mul_mod(add_mod(a7, b7), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a7, b7), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta7, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a8: u32 = witness::FRI_A_8;
+    let path_a8: (u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_A_8;
+    let b8: u32 = witness::FRI_B_8;
+    let path_b8: (u256, u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_B_8;
+    assert!(jet::eq_32(cp, a8));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_9(sha256_32(a8), path_a, path_a8, root8);
+    merkle_verify_9(sha256_32(b8), path_b, path_b8, root8);
+    let even: u32 = mul_mod(add_mod(a8, b8), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a8, b8), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta8, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a9: u32 = witness::FRI_A_9;
+    let path_a9: (u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_A_9;
+    let b9: u32 = witness::FRI_B_9;
+    let path_b9: (u256, u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_B_9;
+    assert!(jet::eq_32(cp, a9));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_8(sha256_32(a9), path_a, path_a9, root9);
+    merkle_verify_8(sha256_32(b9), path_b, path_b9, root9);
+    let even: u32 = mul_mod(add_mod(a9, b9), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a9, b9), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta9, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a10: u32 = witness::FRI_A_10;
+    let path_a10: (u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_A_10;
+    let b10: u32 = witness::FRI_B_10;
+    let path_b10: (u256, u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_B_10;
+    assert!(jet::eq_32(cp, a10));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_7(sha256_32(a10), path_a, path_a10, root10);
+    merkle_verify_7(sha256_32(b10), path_b, path_b10, root10);
+    let even: u32 = mul_mod(add_mod(a10, b10), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a10, b10), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta10, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a11: u32 = witness::FRI_A_11;
+    let path_a11: (u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_A_11;
+    let b11: u32 = witness::FRI_B_11;
+    let path_b11: (u256, u256, u256, u256, u256, u256) = witness::FRI_PATH_B_11;
+    assert!(jet::eq_32(cp, a11));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_6(sha256_32(a11), path_a, path_a11, root11);
+    merkle_verify_6(sha256_32(b11), path_b, path_b11, root11);
+    let even: u32 = mul_mod(add_mod(a11, b11), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a11, b11), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta11, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a12: u32 = witness::FRI_A_12;
+    let path_a12: (u256, u256, u256, u256, u256) = witness::FRI_PATH_A_12;
+    let b12: u32 = witness::FRI_B_12;
+    let path_b12: (u256, u256, u256, u256, u256) = witness::FRI_PATH_B_12;
+    assert!(jet::eq_32(cp, a12));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_5(sha256_32(a12), path_a, path_a12, root12);
+    merkle_verify_5(sha256_32(b12), path_b, path_b12, root12);
+    let even: u32 = mul_mod(add_mod(a12, b12), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a12, b12), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta12, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a13: u32 = witness::FRI_A_13;
+    let path_a13: (u256, u256, u256, u256) = witness::FRI_PATH_A_13;
+    let b13: u32 = witness::FRI_B_13;
+    let path_b13: (u256, u256, u256, u256) = witness::FRI_PATH_B_13;
+    assert!(jet::eq_32(cp, a13));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_4(sha256_32(a13), path_a, path_a13, root13);
+    merkle_verify_4(sha256_32(b13), path_b, path_b13, root13);
+    let even: u32 = mul_mod(add_mod(a13, b13), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a13, b13), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta13, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a14: u32 = witness::FRI_A_14;
+    let path_a14: (u256, u256, u256) = witness::FRI_PATH_A_14;
+    let b14: u32 = witness::FRI_B_14;
+    let path_b14: (u256, u256, u256) = witness::FRI_PATH_B_14;
+    assert!(jet::eq_32(cp, a14));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_3(sha256_32(a14), path_a, path_a14, root14);
+    merkle_verify_3(sha256_32(b14), path_b, path_b14, root14);
+    let even: u32 = mul_mod(add_mod(a14, b14), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a14, b14), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta14, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a15: u32 = witness::FRI_A_15;
+    let path_a15: (u256, u256) = witness::FRI_PATH_A_15;
+    let b15: u32 = witness::FRI_B_15;
+    let path_b15: (u256, u256) = witness::FRI_PATH_B_15;
+    assert!(jet::eq_32(cp, a15));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_2(sha256_32(a15), path_a, path_a15, root15);
+    merkle_verify_2(sha256_32(b15), path_b, path_b15, root15);
+    let even: u32 = mul_mod(add_mod(a15, b15), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a15, b15), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta15, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    let a16: u32 = witness::FRI_A_16;
+    let path_a16: u256 = witness::FRI_PATH_A_16;
+    let b16: u32 = witness::FRI_B_16;
+    let path_b16: u256 = witness::FRI_PATH_B_16;
+    assert!(jet::eq_32(cp, a16));
+    let (_, path_a): (bool, u32) = jet::add_32(jet::modulo_32(idx, domain_size), domain_size);
+    let (_, sibling_index): (bool, u32) = jet::add_32(idx, jet::divide_32(domain_size, 2));
+    let (_, path_b): (bool, u32) = jet::add_32(jet::modulo_32(sibling_index, domain_size), domain_size);
+    merkle_verify_1(sha256_32(a16), path_a, path_a16, root16);
+    merkle_verify_1(sha256_32(b16), path_b, path_b16, root16);
+    let even: u32 = mul_mod(add_mod(a16, b16), 1610612737);
+    let odd: u32 = mul_mod(mul_mod(sub_mod(a16, b16), 1610612737), x_inv);
+    let cp: u32 = add_mod(even, mul_mod(beta16, odd));
+    let x: u32 = mul_mod(x, x);
+    let x_inv: u32 = mul_mod(x_inv, x_inv);
+    let domain_size: u32 = jet::divide_32(domain_size, 2);
+    assert!(jet::eq_32(cp, last));
+    assert!(jet::eq_32(domain_size, 1));
+    assert!(jet::eq_256(jet::outputs_hash(), 0xc5bfb8fe204efe0c4c5b3317c94e74574bb67dff6a1e5020d925b7ada487706c));
+}

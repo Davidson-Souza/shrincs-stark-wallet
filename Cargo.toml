@@ -1,0 +1,23 @@
+[package]
+name = "shrincs-stark-wallet"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+build = "build.rs"
+
+[[bin]]
+name = "ssw"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+bitcoin = { version = "0.32.7", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+hex = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+
+[build-dependencies]
+cc = "1.2"
+

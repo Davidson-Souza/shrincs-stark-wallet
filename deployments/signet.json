@@ -1,0 +1,41 @@
+{
+  "network": "signet",
+  "signet_challenge": "00147cb2a6ddb8125278166fb414ed11b9f78a33ebe6",
+  "node": "Bitcoin Inquisition v29.2.0",
+  "observed_height": 2134,
+  "funding_transaction": "0a128808ae937da97939c6a93735e4b751f64e6875371dd7795a22ff31e4eb1f",
+  "simplicity_smoke": {
+    "program": "unit (serialized as 24)",
+    "cmr": "c40a10263f7436b4160acbef1c36fba4be4d95df181a968afeab5eac247adff7",
+    "address": "tb1pzjehfs3vskwj6022c255hyh948ecjsqzv25fkm29w7gwzazyccfqx7ukxk",
+    "funding_transaction": "ebd01cc43bb5115e6734229d5b8a468eb95ce017d549145b64b3251d40f678ba",
+    "spending_transaction": "e54a649fb868fa54cbbfe0650b3444b114ad66fecd6b1f525186299beb8dc5fd",
+    "confirmed_at_or_before_height": 2134
+  },
+  "stark_verifier": {
+    "compiler_cmr_attempt": {
+      "address": "tb1ptkc2srxtej0655w0llfvdhvw6xvcl38udc5nr9n90v4tlhzwd30qlusp29",
+      "funding_transaction": "526c9ebf91030257e64227102fbf5811a457c22b6bf66be4416be01539b6505d",
+      "funding_vout": 1,
+      "spend_broadcast": false,
+      "consensus_rejection": "Program's CMR does not match"
+    },
+    "address": "tb1psf72z9p3qy0p3ufd8xvvstaeq84g7j9well8lwj5q0mkqvqhawtq7m3uah",
+    "funding_transaction": "f6557ecf7ff6fd2829674b7b136fa9b6a794461329b31e185f2472b01e280d6c",
+    "funding_vout": 1,
+    "spend_broadcast": false,
+    "consensus_rejection": "Program's execution cost could exceed budget",
+    "analysis": "contracts/stark101/artifacts/bitcoin-signet-analysis.json"
+  },
+  "offchain_quorum_demos": [
+    {
+      "policy": "2-of-3",
+      "commitment": "634d4f883e27c2e2f3f198ff2bb68f998591bf3146cbc47210b0f84e7cf4f4b4"
+    },
+    {
+      "policy": "3-of-5",
+      "commitment": "3e51a51751ff3cfb02cca6969dc742eeb35402a89014c0d3835bda7e8936556a"
+    }
+  ],
+  "quorum_transactions_are_onchain_verified": false
+}

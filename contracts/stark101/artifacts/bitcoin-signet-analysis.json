@@ -1,0 +1,13 @@
+{
+  "bitcoin_inquisition_version": "v29.2.0",
+  "program_bytes": 6394,
+  "witness_bytes": 7191,
+  "simfony_compiler_cmr": "a45c491b61f6009fbffb487d8f592399c7643e1bbc94e1fa8680cfaf3cf3bb5d",
+  "bitcoin_decoder_cmr": "193d96555d30ae57c3f94429350de82abcf11a6df87c46d331f9c8aa67245d4e",
+  "simfony_cost_milliweight": 79230863,
+  "simfony_padding_bytes": 64845,
+  "bitcoin_cost_milliweight_lower_bound": 4294967295,
+  "bitcoin_budget_max_weight": 4000050,
+  "deployable": false,
+  "reason": "The current Bitcoin Inquisition decoder assigns a static execution bound above the consensus BUDGET_MAX. The imported compiler and the node also derive different CMRs."
+}
